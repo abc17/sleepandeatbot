@@ -2,3 +2,4 @@ python-telegram-bot>=20.0
 matplotlib
 pandas
 numpy
+python-dotenv
