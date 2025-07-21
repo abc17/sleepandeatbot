@@ -154,7 +154,7 @@ async def handle_load(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_data = json.loads(content)
     context.bot_data['chat_data'] = chat_data
 
-    await update.message.reply_text("Файл успешно загружен. Теперь отправь /график")
+    await update.message.reply_text("Файл успешно загружен. Теперь отправь /graph")
 
 if __name__ == '__main__':
     from dotenv import load_dotenv
@@ -163,7 +163,7 @@ if __name__ == '__main__':
     TOKEN = os.getenv("TELEGRAM_TOKEN")
 
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("график", handle_graph))
+    app.add_handler(CommandHandler("graph", handle_graph))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_load))
 
     print("Бот запущен")
