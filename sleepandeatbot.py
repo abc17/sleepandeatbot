@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timedelta, time
 from io import BytesIO
 from telegram import Update, InputFile
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import ContextTypes, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 # === Логирование ===
 logging.basicConfig(level=logging.INFO)
@@ -98,7 +98,7 @@ def create_plot(sleep_df, feed_df):
     return fig
 
 
-def handle_graph(update: Update, context: CallbackContext):
+def handle_graph(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global feed_data, sleep_data  # твои списки словарей
 
     args = context.args
