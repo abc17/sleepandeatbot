@@ -98,7 +98,7 @@ def create_plot(sleep_df, feed_df):
     return fig
 
 
-async def handle_graph(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_graph(update: Update, context: CallbackContext):
     global feed_data, sleep_data  # твои списки словарей
 
     args = context.args
