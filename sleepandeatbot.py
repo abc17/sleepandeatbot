@@ -97,7 +97,7 @@ def create_plot(sleep_df, feed_df):
     plt.tight_layout()
     return fig
 
-async from datetime import datetime
+from datetime import datetime
 
 def handle_graph(update: Update, context: CallbackContext):
     global feed_data, sleep_data  # твои списки словарей
@@ -140,7 +140,7 @@ def handle_graph(update: Update, context: CallbackContext):
     buf.close()
 
 
-async def handle_load(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_load(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.document:
         await update.message.reply_text("Прикрепи json-файл")
         return
