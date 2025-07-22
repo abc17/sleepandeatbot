@@ -4,7 +4,7 @@ import io
 import os
 import logging
 from datetime import datetime, timedelta, time
-import pandas as pd
+from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 from telegram import Update
@@ -26,8 +26,8 @@ class BabyDataAnalyzer:
         self.feed_pattern = re.compile(r'(\d{1,2}:\d{2}) смесь[^\d]*(\d+)')
         
         # Хранение последних обработанных данных
-        self.last_sleep_df = pd.DataFrame()
-        self.last_feed_df = pd.DataFrame()
+        self.last_sleep_data = []
+        self.last_feed_data = []
         
     def get_color_by_amount(self, amount, cmap):
         """Определение цвета по количеству смеси"""
@@ -83,18 +83,15 @@ class BabyDataAnalyzer:
                 feed_dt = datetime.combine(msg_date.date(), feed_time)
                 feed_data.append({'date': msg_date.date(), 'time': feed_dt, 'amount': amount})
 
-        sleep_df = pd.DataFrame(sleep_data)
-        feed_df = pd.DataFrame(feed_data)
-        
         # Сохраняем данные для использования в команде /data
-        self.last_sleep_df = sleep_df
-        self.last_feed_df = feed_df
+        self.last_sleep_data = sleep_data
+        self.last_feed_data = feed_data
         
-        return sleep_df, feed_df
+        return sleep_data, feed_data
     
     def get_daily_stats(self, start_date, end_date):
         """Получение статистики по дням за указанный период"""
-        if self.last_sleep_df.empty and self.last_feed_df.empty:
+        if not self.last_sleep_data and not self.last_feed_data:
             return None
             
         stats = {}
@@ -109,21 +106,19 @@ class BabyDataAnalyzer:
             }
             
             # Статистика по питанию
-            if not self.last_feed_df.empty:
-                day_feed = self.last_feed_df[self.last_feed_df['date'] == current_date]
-                daily_stats['total_food'] = day_feed['amount'].sum()
+            for feed in self.last_feed_data:
+                if feed['date'] == current_date:
+                    daily_stats['total_food'] += feed['amount']
             
             # Статистика по сну
-            if not self.last_sleep_df.empty:
-                day_sleep = self.last_sleep_df[self.last_sleep_df['date'] == current_date]
-                if not day_sleep.empty:
-                    sleep_duration = (day_sleep['end'] - day_sleep['start']).dt.total_seconds() / 3600
-                    daily_stats['sleep_hours'] = sleep_duration.sum()
-                    daily_stats['awake_hours'] = 24 - daily_stats['sleep_hours']
-                else:
-                    daily_stats['awake_hours'] = 24
-            else:
-                daily_stats['awake_hours'] = 24
+            total_sleep_seconds = 0
+            for sleep in self.last_sleep_data:
+                if sleep['date'] == current_date:
+                    sleep_duration = (sleep['end'] - sleep['start']).total_seconds()
+                    total_sleep_seconds += sleep_duration
+            
+            daily_stats['sleep_hours'] = total_sleep_seconds / 3600
+            daily_stats['awake_hours'] = 24 - daily_stats['sleep_hours']
             
             stats[current_date] = daily_stats
             current_date += timedelta(days=1)
@@ -146,13 +141,19 @@ class BabyDataAnalyzer:
             
         return "\n".join(result).strip()
     
-    def create_timeline_chart(self, sleep_df, feed_df):
+    def create_timeline_chart(self, sleep_data, feed_data):
         """Создание временной диаграммы"""
-        if sleep_df.empty and feed_df.empty:
+        if not sleep_data and not feed_data:
             return None
             
-        all_dates = sorted(set(feed_df['date'] if not feed_df.empty else set()).union(
-                          set(sleep_df['date'] if not sleep_df.empty else set())))
+        # Получаем все уникальные даты
+        all_dates = set()
+        for sleep in sleep_data:
+            all_dates.add(sleep['date'])
+        for feed in feed_data:
+            all_dates.add(feed['date'])
+            
+        all_dates = sorted(all_dates)
         
         if not all_dates:
             return None
@@ -161,33 +162,31 @@ class BabyDataAnalyzer:
         
         # Цветовая карта для объемов смеси
         cmap = plt.cm.Blues
-        if not feed_df.empty:
-            norm = plt.Normalize(feed_df['amount'].min(), feed_df['amount'].max())
 
         for i, day in enumerate(all_dates):
             base_time = datetime.combine(day, datetime.min.time())
 
             # Отображение сна
-            if not sleep_df.empty:
-                day_sleep = sleep_df[sleep_df['date'] == day]
-                for _, row in day_sleep.iterrows():
-                    start = row['start']
-                    end = row['end']
+            for sleep in sleep_data:
+                if sleep['date'] == day:
+                    start = sleep['start']
+                    end = sleep['end']
                     ax.hlines(i, (start - base_time).total_seconds() / 3600,
                               (end - base_time).total_seconds() / 3600,
                               colors='skyblue', linewidth=10, 
                               label='Сон' if i == 0 else "")
 
             # Отображение кормления
-            if not feed_df.empty:
-                day_feed = feed_df[feed_df['date'] == day]
-                for _, row in day_feed.iterrows():
-                    time_point = row['time']
-                    amount = row['amount']
+            first_feed = True
+            for feed in feed_data:
+                if feed['date'] == day:
+                    time_point = feed['time']
+                    amount = feed['amount']
                     time_offset = (time_point - base_time).total_seconds() / 3600
                     color = self.get_color_by_amount(amount, cmap)
                     ax.plot(time_offset, i, 'o', color=color, markersize=8,
-                           label='Смесь' if i == 0 and _ == day_feed.index[0] else "")
+                           label='Смесь' if i == 0 and first_feed else "")
+                    first_feed = False
 
         # Настройка осей
         ax.set_yticks(range(len(all_dates)))
@@ -199,7 +198,7 @@ class BabyDataAnalyzer:
         ax.set_xticks(range(0, 24))
         ax.set_xticklabels([f'{h}' for h in range(0, 24)])
         
-        if not sleep_df.empty or not feed_df.empty:
+        if sleep_data or feed_data:
             ax.legend()
         
         plt.title('Режим сна и кормления по дням')
@@ -212,62 +211,62 @@ class BabyDataAnalyzer:
         plt.close()
         return buf
     
-    def create_summary_chart(self, sleep_df, feed_df):
+    def create_summary_chart(self, sleep_data, feed_data):
         """Создание сводного графика по дням"""
-        if sleep_df.empty and feed_df.empty:
+        if not sleep_data and not feed_data:
             return None
             
         # Подготовка данных
-        daily_data = {}
+        daily_data = defaultdict(dict)
         
-        if not feed_df.empty:
-            daily_feed = feed_df.groupby('date')['amount'].sum().reset_index()
-            for _, row in daily_feed.iterrows():
-                daily_data[row['date']] = {'amount': row['amount']}
+        # Группировка данных о кормлении по дням
+        for feed in feed_data:
+            date = feed['date']
+            if 'amount' not in daily_data[date]:
+                daily_data[date]['amount'] = 0
+            daily_data[date]['amount'] += feed['amount']
         
-        if not sleep_df.empty:
-            sleep_df['duration_min'] = (sleep_df['end'] - sleep_df['start']).dt.total_seconds() / 60
-            daily_sleep = sleep_df.groupby('date')['duration_min'].sum().reset_index()
-            for _, row in daily_sleep.iterrows():
-                if row['date'] not in daily_data:
-                    daily_data[row['date']] = {}
-                daily_data[row['date']]['duration_hr'] = row['duration_min'] / 60
+        # Группировка данных о сне по дням
+        sleep_by_date = defaultdict(float)
+        for sleep in sleep_data:
+            date = sleep['date']
+            duration_hours = (sleep['end'] - sleep['start']).total_seconds() / 3600
+            sleep_by_date[date] += duration_hours
+        
+        for date, duration in sleep_by_date.items():
+            daily_data[date]['duration_hr'] = duration
         
         if not daily_data:
             return None
-            
-        # Создание DataFrame
-        merged_data = []
-        for date, values in daily_data.items():
-            row = {'date': date}
-            row.update(values)
-            merged_data.append(row)
         
-        merged = pd.DataFrame(merged_data).sort_values('date')
+        # Сортировка данных по датам
+        sorted_dates = sorted(daily_data.keys())
+        amounts = [daily_data[date].get('amount', 0) for date in sorted_dates]
+        durations = [daily_data[date].get('duration_hr', 0) for date in sorted_dates]
         
         # Создание графика
         fig, ax1 = plt.subplots(figsize=(10, 5))
         
         # График смеси (левая ось)
-        if 'amount' in merged.columns:
+        if any(amounts):
             color1 = 'tab:orange'
             ax1.set_xlabel('Дата')
             ax1.set_ylabel('Смесь (мл)', color=color1)
-            ax1.bar(merged['date'], merged.get('amount', 0), 
+            ax1.bar(sorted_dates, amounts, 
                    color=color1, alpha=0.6, label='Смесь (мл)')
             ax1.tick_params(axis='y', labelcolor=color1)
-            max_amount = merged.get('amount', pd.Series([0])).max()
+            max_amount = max(amounts) if amounts else 120
             ax1.set_ylim(0, max(max_amount, 120))
         
         # График сна (правая ось)
-        if 'duration_hr' in merged.columns:
+        if any(durations):
             ax2 = ax1.twinx()
             color2 = 'tab:blue'
             ax2.set_ylabel('Сон (часы)', color=color2)
-            ax2.plot(merged['date'], merged['duration_hr'], 
+            ax2.plot(sorted_dates, durations, 
                     color=color2, marker='o', label='Сон (часы)')
             ax2.tick_params(axis='y', labelcolor=color2)
-            max_sleep = merged['duration_hr'].max()
+            max_sleep = max(durations) if durations else 15
             ax2.set_ylim(0, max(max_sleep, 15))
         
         ax1.grid(axis='y', linestyle='--', alpha=0.5)
@@ -343,7 +342,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /data"""
-    if analyzer.last_sleep_df.empty and analyzer.last_feed_df.empty:
+    if not analyzer.last_sleep_data and not analyzer.last_feed_data:
         await update.message.reply_text(
             "Сначала загрузите JSON файл с данными для анализа."
         )
@@ -421,9 +420,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = json.loads(file_bytes.decode('utf-8'))
         
         # Анализ данных
-        sleep_df, feed_df = analyzer.parse_chat_data(data)
+        sleep_data, feed_data = analyzer.parse_chat_data(data)
         
-        if sleep_df.empty and feed_df.empty:
+        if not sleep_data and not feed_data:
             await update.message.reply_text(
                 "Не удалось найти данные о сне или кормлении в файле.\n"
                 "Проверьте формат записей:\n"
@@ -434,15 +433,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Отправка статистики
         stats_text = f"Найдено данных:\n"
-        if not sleep_df.empty:
-            stats_text += f"• Записей о сне: {len(sleep_df)}\n"
-        if not feed_df.empty:
-            stats_text += f"• Записей о кормлении: {len(feed_df)}\n"
+        if sleep_data:
+            stats_text += f"• Записей о сне: {len(sleep_data)}\n"
+        if feed_data:
+            stats_text += f"• Записей о кормлении: {len(feed_data)}\n"
         
         await update.message.reply_text(stats_text + "\nСоздаю графики...")
         
         # Создание и отправка временной диаграммы
-        timeline_chart = analyzer.create_timeline_chart(sleep_df, feed_df)
+        timeline_chart = analyzer.create_timeline_chart(sleep_data, feed_data)
         if timeline_chart:
             await update.message.reply_photo(
                 photo=timeline_chart,
@@ -450,7 +449,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         # Создание и отправка сводного графика
-        summary_chart = analyzer.create_summary_chart(sleep_df, feed_df)
+        summary_chart = analyzer.create_summary_chart(sleep_data, feed_data)
         if summary_chart:
             await update.message.reply_photo(
                 photo=summary_chart,
