@@ -25,6 +25,10 @@ class BabyDataAnalyzer:
         self.sleep_pattern = re.compile(r'(\d{1,2}:\d{2})[–\-](\d{1,2}:\d{2}).*сон', re.IGNORECASE)
         self.feed_pattern = re.compile(r'(\d{1,2}:\d{2}) смесь[^\d]*(\d+)')
         
+        # Хранение последних обработанных данных
+        self.last_sleep_df = pd.DataFrame()
+        self.last_feed_df = pd.DataFrame()
+        
     def get_color_by_amount(self, amount, cmap):
         """Определение цвета по количеству смеси"""
         if amount <= 40:
@@ -79,7 +83,68 @@ class BabyDataAnalyzer:
                 feed_dt = datetime.combine(msg_date.date(), feed_time)
                 feed_data.append({'date': msg_date.date(), 'time': feed_dt, 'amount': amount})
 
-        return pd.DataFrame(sleep_data), pd.DataFrame(feed_data)
+        sleep_df = pd.DataFrame(sleep_data)
+        feed_df = pd.DataFrame(feed_data)
+        
+        # Сохраняем данные для использования в команде /data
+        self.last_sleep_df = sleep_df
+        self.last_feed_df = feed_df
+        
+        return sleep_df, feed_df
+    
+    def get_daily_stats(self, start_date, end_date):
+        """Получение статистики по дням за указанный период"""
+        if self.last_sleep_df.empty and self.last_feed_df.empty:
+            return None
+            
+        stats = {}
+        current_date = start_date
+        
+        while current_date <= end_date:
+            daily_stats = {
+                'date': current_date,
+                'total_food': 0,
+                'sleep_hours': 0,
+                'awake_hours': 0
+            }
+            
+            # Статистика по питанию
+            if not self.last_feed_df.empty:
+                day_feed = self.last_feed_df[self.last_feed_df['date'] == current_date]
+                daily_stats['total_food'] = day_feed['amount'].sum()
+            
+            # Статистика по сну
+            if not self.last_sleep_df.empty:
+                day_sleep = self.last_sleep_df[self.last_sleep_df['date'] == current_date]
+                if not day_sleep.empty:
+                    sleep_duration = (day_sleep['end'] - day_sleep['start']).dt.total_seconds() / 3600
+                    daily_stats['sleep_hours'] = sleep_duration.sum()
+                    daily_stats['awake_hours'] = 24 - daily_stats['sleep_hours']
+                else:
+                    daily_stats['awake_hours'] = 24
+            else:
+                daily_stats['awake_hours'] = 24
+            
+            stats[current_date] = daily_stats
+            current_date += timedelta(days=1)
+            
+        return stats
+    
+    def format_daily_stats(self, stats):
+        """Форматирование статистики по дням для вывода"""
+        if not stats:
+            return "Нет данных за указанный период."
+            
+        result = []
+        for date, data in stats.items():
+            date_str = date.strftime('%d.%m.%Y')
+            result.append(f"{date_str}")
+            result.append(f"Всего съедено: {int(data['total_food'])} мл")
+            result.append(f"Время сна: {data['sleep_hours']:.1f} часов")
+            result.append(f"Время бодрствования: {data['awake_hours']:.1f} часов")
+            result.append("")  # Пустая строка между днями
+            
+        return "\n".join(result).strip()
     
     def create_timeline_chart(self, sleep_df, feed_df):
         """Создание временной диаграммы"""
@@ -220,6 +285,13 @@ class BabyDataAnalyzer:
 # Создание экземпляра анализатора
 analyzer = BabyDataAnalyzer()
 
+def parse_date(date_str):
+    """Парсинг даты из строки в формате dd.mm.yyyy"""
+    try:
+        return datetime.strptime(date_str, "%d.%m.%Y").date()
+    except ValueError:
+        return None
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     welcome_text = """
@@ -234,18 +306,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Команды:
 /help - показать справку
+/data <дата1> <дата2> - показать данные за период (формат: dd.mm.yyyy)
+/data today - показать данные за сегодня
+/data yesterday - показать данные за вчера
+
+Пример: /data 21.07.2025 22.07.2025
     """
     await update.message.reply_text(welcome_text)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
     help_text = """
+Инструкция по использованию:
 
 1. Экспортируйте чат Telegram в JSON формате
 2. Отправьте файл боту
 3. Получите два графика:
    • Временная диаграмма по дням
    • Сводная статистика
+
+4. Используйте команду /data для просмотра статистики:
+   • /data 21.07.2025 22.07.2025 - за период
+   • /data today - за сегодня
+   • /data yesterday - за вчера
 
 Поддерживаемые форматы записей:
 • Сон: "09:30–11:00 сон" или "09:30-11:00 сон"
@@ -258,16 +341,73 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(help_text)
 
+async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /data"""
+    if analyzer.last_sleep_df.empty and analyzer.last_feed_df.empty:
+        await update.message.reply_text(
+            "Сначала загрузите JSON файл с данными для анализа."
+        )
+        return
+    
+    args = context.args
+    
+    if not args:
+        await update.message.reply_text(
+            "Укажите период для анализа:\n"
+            "/data 21.07.2025 22.07.2025 - за период\n"
+            "/data today - за сегодня\n"
+            "/data yesterday - за вчера"
+        )
+        return
+    
+    today = datetime.now().date()
+    
+    if args[0].lower() == 'today':
+        start_date = end_date = today
+    elif args[0].lower() == 'yesterday':
+        yesterday = today - timedelta(days=1)
+        start_date = end_date = yesterday
+    elif len(args) == 2:
+        start_date = parse_date(args[0])
+        end_date = parse_date(args[1])
+        
+        if not start_date or not end_date:
+            await update.message.reply_text(
+                "Неверный формат даты. Используйте формат dd.mm.yyyy\n"
+                "Пример: /data 21.07.2025 22.07.2025"
+            )
+            return
+            
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+    else:
+        await update.message.reply_text(
+            "Неверное количество аргументов. Используйте:\n"
+            "/data 21.07.2025 22.07.2025 - за период\n"
+            "/data today - за сегодня\n"
+            "/data yesterday - за вчера"
+        )
+        return
+    
+    # Получение и форматирование статистики
+    stats = analyzer.get_daily_stats(start_date, end_date)
+    formatted_stats = analyzer.format_daily_stats(stats)
+    
+    if not formatted_stats or formatted_stats == "Нет данных за указанный период.":
+        await update.message.reply_text("Нет данных за указанный период.")
+    else:
+        await update.message.reply_text(formatted_stats)
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик загрузки документов"""
     document = update.message.document
     
     if not document.file_name.endswith('.json'):
-        await update.message.reply_text("❌ Пожалуйста, отправьте JSON файл.")
+        await update.message.reply_text("Пожалуйста, отправьте JSON файл.")
         return
     
     if document.file_size > 20 * 1024 * 1024:  # 20 МБ
-        await update.message.reply_text("❌ Файл слишком большой. Максимальный размер: 20 МБ.")
+        await update.message.reply_text("Файл слишком большой. Максимальный размер: 20 МБ.")
         return
     
     await update.message.reply_text("Файл получен, анализирую данные...")
@@ -285,7 +425,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if sleep_df.empty and feed_df.empty:
             await update.message.reply_text(
-                "❌ Не удалось найти данные о сне или кормлении в файле.\n"
+                "Не удалось найти данные о сне или кормлении в файле.\n"
                 "Проверьте формат записей:\n"
                 "• Сон: '09:30–11:00 сон'\n"
                 "• Смесь: '14:20 смесь 80'"
@@ -299,7 +439,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not feed_df.empty:
             stats_text += f"• Записей о кормлении: {len(feed_df)}\n"
         
-        await update.message.reply_text(stats_text + "\n Создаю графики...")
+        await update.message.reply_text(stats_text + "\nСоздаю графики...")
         
         # Создание и отправка временной диаграммы
         timeline_chart = analyzer.create_timeline_chart(sleep_df, feed_df)
@@ -317,15 +457,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption="Сводная статистика по дням"
             )
         
-        await update.message.reply_text("Анализ завершен")
+        await update.message.reply_text(
+            "Анализ завершен. Теперь вы можете использовать команду /data для просмотра статистики по дням."
+        )
         
     except json.JSONDecodeError:
-        await update.message.reply_text("❌ Ошибка: файл не является корректным JSON.")
+        await update.message.reply_text("Ошибка: файл не является корректным JSON.")
     except KeyError as e:
-        await update.message.reply_text(f"❌ Ошибка: не найден ключ {e} в структуре файла.")
+        await update.message.reply_text(f"Ошибка: не найден ключ {e} в структуре файла.")
     except Exception as e:
         logger.error(f"Ошибка при обработке файла: {e}")
-        await update.message.reply_text("❌ Произошла ошибка при обработке файла. Попробуйте еще раз.")
+        await update.message.reply_text("Произошла ошибка при обработке файла. Попробуйте еще раз.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
@@ -337,7 +479,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Основная функция запуска бота"""
     if not TOKEN:
-        print("❌ Ошибка: не найден TELEGRAM_TOKEN в переменных окружения")
+        print("Ошибка: не найден TELEGRAM_TOKEN в переменных окружения")
         return
     
     # Создание приложения
@@ -346,6 +488,7 @@ def main():
     # Добавление обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("data", data_command))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
