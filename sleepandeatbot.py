@@ -270,7 +270,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Файл слишком большой. Максимальный размер: 20 МБ.")
         return
     
-    await update.message.reply_text("📁 Файл получен! Анализирую данные...")
+    await update.message.reply_text("Файл получен, анализирую данные...")
     
     try:
         # Скачивание файла
@@ -293,20 +293,20 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Отправка статистики
-        stats_text = f"📊 Найдено данных:\n"
+        stats_text = f"Найдено данных:\n"
         if not sleep_df.empty:
             stats_text += f"• Записей о сне: {len(sleep_df)}\n"
         if not feed_df.empty:
             stats_text += f"• Записей о кормлении: {len(feed_df)}\n"
         
-        await update.message.reply_text(stats_text + "\n🎨 Создаю графики...")
+        await update.message.reply_text(stats_text + "\n Создаю графики...")
         
         # Создание и отправка временной диаграммы
         timeline_chart = analyzer.create_timeline_chart(sleep_df, feed_df)
         if timeline_chart:
             await update.message.reply_photo(
                 photo=timeline_chart,
-                caption="📈 Временная диаграмма режима дня"
+                caption="Режим дня"
             )
         
         # Создание и отправка сводного графика
@@ -314,10 +314,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if summary_chart:
             await update.message.reply_photo(
                 photo=summary_chart,
-                caption="📊 Сводная статистика по дням"
+                caption="Сводная статистика по дням"
             )
         
-        await update.message.reply_text("✅ Анализ завершен!")
+        await update.message.reply_text("Анализ завершен")
         
     except json.JSONDecodeError:
         await update.message.reply_text("❌ Ошибка: файл не является корректным JSON.")
@@ -350,7 +350,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Запуск бота
-    print("🤖 Бот запущен")
+    print("Бот запущен")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
